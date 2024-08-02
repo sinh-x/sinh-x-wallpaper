@@ -18,7 +18,7 @@
           pname = "sinh-x-wallpaper";
           version = "0.1.0";
           src = ./.;
-          cargoSha256 = "";
+          cargoHash = "sha256-P35+K7ipaPg7z1HXPjofEW4LM21VDsCyJP/SidMnrik=";
           buildInputs = [pkgs.openssl];
           nativeBuildInputs = [pkgs.cargo pkgs.rustc pkgs.pkg-config pkgs.openssl];
         };

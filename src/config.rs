@@ -16,6 +16,9 @@ pub struct Feh {}
 #[derive(Deserialize)]
 pub struct Download {
     pub api_key: String,
+    pub purity: String,
+    pub categories: String,
+    pub query: String,
 }
 
 #[derive(Deserialize)]
