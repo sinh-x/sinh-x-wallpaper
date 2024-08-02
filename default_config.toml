@@ -1,0 +1,10 @@
+[general]
+wallpaper_dir = "/home/sinh/Pictures/Wallpapers"
+wallpaper_app = "swww"
+
+[swww]
+
+[feh]
+
+[download]
+api_key = "5a1d"

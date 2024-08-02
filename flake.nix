@@ -9,20 +9,18 @@
     self,
     nixpkgs,
     flake-utils,
+    ...
   }:
     flake-utils.lib.eachDefaultSystem (
       system: let
-        pkgs = nixpkgs.legacypackages.${system};
-        sinh-x-wallpaper = pkgs.rustplatform.buildrustpackage {
+        pkgs = nixpkgs.legacyPackages.${system};
+        sinh-x-wallpaper = pkgs.rustPlatform.buildRustPackage {
           pname = "sinh-x-wallpaper";
           version = "0.1.0";
           src = ./.;
-          cargosha256 = "";
-          buildinputs = [pkgs.openssl];
+          cargoSha256 = "";
+          buildInputs = [pkgs.openssl];
           nativeBuildInputs = [pkgs.cargo pkgs.rustc pkgs.pkg-config pkgs.openssl];
-          ld_library_path = pkgs.lib.makelibrarypath [
-            pkgs.openssl
-          ];
         };
       in {
         defaultPackage = sinh-x-wallpaper;
