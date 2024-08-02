@@ -4,7 +4,18 @@ use std::fs;
 #[derive(Deserialize)]
 pub struct General {
     pub wallpaper_dir: String,
+    pub purity: Option<String>,
     pub wallpaper_app: String,
+}
+
+impl Default for General {
+    fn default() -> Self {
+        Self {
+            wallpaper_dir: "".to_string(),
+            purity: Some("sfw".to_string()),
+            wallpaper_app: "".to_string(),
+        }
+    }
 }
 
 #[derive(Deserialize)]

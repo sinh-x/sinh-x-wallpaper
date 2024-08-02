@@ -1,6 +1,5 @@
 use dirs;
 use rand::Rng;
-use reqwest::Error;
 use serde::Deserialize;
 use serde_json::from_str;
 use std::fs;
@@ -203,10 +202,15 @@ fn refresh(path: Option<&Path>) -> Result<(), MyError> {
         .expect("Failed to load config");
     config.validate().expect("Invalid config");
 
+    let mut wallpaper_dir = PathBuf::from(&config.general.wallpaper_dir);
+    if config.general.purity.as_deref() == Some("nsfw") {
+        wallpaper_dir = wallpaper_dir.join("nsfw");
+    }
+
     let wallpaper = match path {
         Some(path) => path.to_path_buf(),
         None => {
-            let entries = std::fs::read_dir(config.general.wallpaper_dir)?;
+            let entries = std::fs::read_dir(wallpaper_dir)?;
             let wallpapers: Vec<_> = entries.map(|e| e.unwrap().path()).collect();
             let mut rng = rand::thread_rng();
             wallpapers[rng.gen_range(0..wallpapers.len())].clone()
@@ -218,7 +222,7 @@ fn refresh(path: Option<&Path>) -> Result<(), MyError> {
         "feh" => {
             println!("Setting wallpaper using feh...");
             let output = std::process::Command::new("feh")
-                .arg("--bg-fill")
+                .arg("--bg-max")
                 .arg("--image-bg #000000")
                 .arg(format!("{}", wallpaper.display()))
                 .output()?;
@@ -277,6 +281,9 @@ fn setup() -> Result<(), MyError> {
     if !config_path.exists() {
         let mut file = File::create(&config_path)?;
         write!(file, "api_key = \"your_api_key\"\n")?;
+    } else {
+        let config = fs::read_to_string(&config_path)?;
+        println!("Config: {}", config);
     }
 
     Ok(())

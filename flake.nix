@@ -1,5 +1,5 @@
 {
-  description = "A Rust application";
+  description = "Sinh-x-wallpaper";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
