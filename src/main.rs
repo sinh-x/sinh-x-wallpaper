@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
 use structopt::StructOpt;
 
 mod error;
@@ -79,16 +80,32 @@ enum Command {
     },
     Download,
     Setup,
+    Archive {
+        #[structopt(short, long, parse(from_os_str))]
+        dir: Option<PathBuf>,
+        #[structopt(short, long, parse(from_os_str))]
+        archive_dir: Option<PathBuf>,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<(), MyError> {
     let opt = Opt::from_args();
 
+    let config = Config::new("/home/sinh/.config/sinh-x/wallpaper/config.toml")
+        .expect("Failed to load config");
+    config.validate().expect("Invalid config");
+
     match opt.cmd {
         Command::Refresh { path } => refresh(path.as_deref())?,
         Command::Download => download().await?,
         Command::Setup => setup()?,
+        Command::Archive { dir, archive_dir } => {
+            let dir = dir.unwrap_or_else(|| PathBuf::from(&config.general.wallpaper_dir));
+            let archive_dir = archive_dir
+                .unwrap_or_else(|| PathBuf::from(&config.general.wallpaper_dir).join("archive"));
+            archive(dir, archive_dir)?;
+        }
     }
 
     Ok(())
@@ -120,29 +137,55 @@ async fn download() -> Result<(), MyError> {
         let response: Response = from_str(&response_text)?;
 
         for wallpaper in response.data {
+            let wallpaper_dir = &config.general.wallpaper_dir;
+            let folder_paths: Vec<_> = fs::read_dir(wallpaper_dir)
+                .expect("Directory not found")
+                .filter_map(|entry| {
+                    let entry = entry.ok()?;
+                    if entry.file_type().ok()?.is_dir() {
+                        Some(entry.path())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
             let file_name = format!(
                 "wallhaven-{}-{}.{}",
                 wallpaper.id,
                 wallpaper.resolution,
                 wallpaper.file_type.split('/').last().unwrap()
             );
-            let mut file_path = PathBuf::from(&config.general.wallpaper_dir);
-            if wallpaper.purity != "sfw" {
-                file_path = file_path.join("nsfw");
+
+            let mut file_exists = false;
+
+            for folder_path in folder_paths {
+                let full_path = Path::new(&folder_path).join(&file_name);
+                if full_path.exists() {
+                    file_exists = true;
+                    break;
+                }
             }
 
-            file_path = file_path.join(&file_name);
+            if !file_exists {
+                let mut file_path = PathBuf::from(&config.general.wallpaper_dir);
+                if wallpaper.purity != "sfw" {
+                    file_path = file_path.join("nsfw");
+                }
 
-            if !file_path.exists() {
-                let image_bytes = reqwest::get(&wallpaper.path).await?.bytes().await?;
-                fs::write(&file_path, image_bytes)?;
-                count += 1;
+                file_path = file_path.join(&file_name);
 
-                println!("Saved wallpaper to: {:?}", file_path);
-                println!("Current count: {}", count);
+                if !file_path.exists() {
+                    let image_bytes = reqwest::get(&wallpaper.path).await?.bytes().await?;
+                    fs::write(&file_path, image_bytes)?;
+                    count += 1;
 
-                if count >= 10 {
-                    break;
+                    println!("Saved wallpaper to: {:?}", file_path);
+                    println!("Current count: {}", count);
+
+                    if count >= 10 {
+                        break;
+                    }
                 }
             }
         }
@@ -235,6 +278,47 @@ fn setup() -> Result<(), MyError> {
         let mut file = File::create(&config_path)?;
         write!(file, "api_key = \"your_api_key\"\n")?;
     }
+
+    Ok(())
+}
+
+fn archive(dir: PathBuf, archive_dir: PathBuf) -> std::io::Result<()> {
+    let one_week_ago = SystemTime::now() - Duration::from_secs(60 * 60 * 24 * 7);
+
+    fs::create_dir_all(&archive_dir)?;
+
+    let mut archived_files = 0;
+
+    fs::read_dir(dir)?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let metadata = entry.metadata().ok()?;
+            if metadata.is_file() && metadata.modified().ok()? < one_week_ago {
+                Some(entry.path())
+            } else {
+                None
+            }
+        })
+        .for_each(|old_file_path| {
+            let archive_file_path = archive_dir.join(old_file_path.file_name().unwrap());
+            fs::rename(old_file_path, archive_file_path).unwrap();
+            archived_files += 1;
+        });
+
+    let total_files = fs::read_dir(&archive_dir)?
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .ok()
+                .and_then(|e| e.metadata().ok())
+                .map_or(false, |m| m.is_file())
+        })
+        .count();
+
+    println!(
+        "Archived {} files. Total files in archive: {}",
+        archived_files, total_files
+    );
 
     Ok(())
 }
