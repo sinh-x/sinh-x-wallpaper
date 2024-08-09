@@ -1,5 +1,7 @@
+use log::debug;
 use serde::Deserialize;
 use std::fs;
+use std::path::{PathBuf};
 
 #[derive(Deserialize)]
 pub struct General {
@@ -14,6 +16,22 @@ impl Default for General {
             wallpaper_dir: "".to_string(),
             purity: Some("sfw".to_string()),
             wallpaper_app: "".to_string(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct DatabaseConfig {
+    pub database_path: String,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        let mut config_path: PathBuf = dirs::home_dir().unwrap();
+        config_path.push(".local/share/applications/sinh-x/wallpaper/");
+
+        Self {
+            database_path: config_path.to_str().unwrap().to_string(),
         }
     }
 }
@@ -38,12 +56,28 @@ pub struct Config {
     pub swww: Option<Swww>,
     pub feh: Option<Feh>,
     pub download: Download,
+    pub database: Option<DatabaseConfig>,
 }
 
 impl Config {
     pub fn new(path: &str) -> Result<Self, toml::de::Error> {
         let contents = fs::read_to_string(path).expect("Failed to read config file");
-        toml::from_str(&contents)
+        let mut config: Config = toml::from_str(&contents)?;
+
+        match &config.database {
+            Some(db_config) => {
+                debug!("Database path: {}", db_config.database_path);
+            }
+            None => {
+                config.database = Some(DatabaseConfig::default());
+                debug!(
+                    "Database path is missing. Using default setting: {}",
+                    "~/.local/share/applications/sinh-x/wallpaper/"
+                );
+            }
+        }
+
+        Ok(config)
     }
 
     pub fn validate(&self) -> Result<(), String> {

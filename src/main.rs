@@ -1,7 +1,10 @@
 use dirs;
+use log::debug;
 use rand::Rng;
-use serde::Deserialize;
+use regex::Regex;
+use serde_derive::{Deserialize, Serialize};
 use serde_json::from_str;
+use serde_json::Value;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -14,10 +17,13 @@ mod error;
 use error::MyError;
 
 mod config;
-use config::Config;
+mod database;
 
-#[derive(Deserialize, Debug)]
-struct Wallpaper {
+use config::Config;
+use database::Database;
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct Wallpaper {
     id: String,
     url: String,
     short_url: String,
@@ -38,15 +44,15 @@ struct Wallpaper {
     thumbs: Thumbs,
 }
 
-#[derive(Deserialize, Debug)]
-struct Thumbs {
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct Thumbs {
     large: String,
     original: String,
     small: String,
 }
 
-#[derive(Deserialize, Debug)]
-struct Meta {
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct Meta {
     current_page: u32,
     last_page: u32,
     per_page: String,
@@ -56,7 +62,7 @@ struct Meta {
 }
 
 #[derive(Deserialize, Debug)]
-struct Response {
+pub struct Response {
     data: Vec<Wallpaper>,
     meta: Meta,
 }
@@ -85,19 +91,39 @@ enum Command {
         #[structopt(short, long, parse(from_os_str))]
         archive_dir: Option<PathBuf>,
     },
+    Current,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), MyError> {
     let opt = Opt::from_args();
 
-    let config = Config::new("/home/sinh/.config/sinh-x/wallpaper/config.toml")
-        .expect("Failed to load config");
+    let config_path: PathBuf = dirs::home_dir().unwrap();
+    let config_path = config_path.join(".config/sinh-x/wallpaper/config.toml");
+    let config = Config::new(&config_path.display().to_string()).expect("Failed to load config");
     config.validate().expect("Invalid config");
+
+    let binding = &config.database.unwrap();
+    let db_path = Path::new(&binding.database_path);
+    let db = Database::new(&db_path).unwrap();
 
     match opt.cmd {
         Command::Refresh { path } => refresh(path.as_deref())?,
-        Command::Download => download().await?,
+        Command::Download => {
+            match download(&db).await {
+                Ok(_) => println!("Downloaded wallpapers successfully"),
+                Err(e) => eprintln!("Failed to download wallpapers: {}", e),
+            }
+            match db.load_from_db() {
+                Ok(wallpapers) => {
+                    for wallpaper in &wallpapers {
+                        debug!("{:?}", wallpaper.url);
+                    }
+                    println!("Total {} wallpapers in the database", wallpapers.len());
+                }
+                Err(e) => eprintln!("Failed to load wallpapers from the database: {}", e),
+            }
+        }
         Command::Setup => setup()?,
         Command::Archive { dir, archive_dir } => {
             let dir = dir.unwrap_or_else(|| PathBuf::from(&config.general.wallpaper_dir));
@@ -105,12 +131,44 @@ async fn main() -> Result<(), MyError> {
                 .unwrap_or_else(|| PathBuf::from(&config.general.wallpaper_dir).join("archive"));
             archive(dir, archive_dir)?;
         }
+        Command::Current => {
+            // Read the ~/.fehbg file
+            let fehbg = fs::read_to_string(Path::new(&format!(
+                "{}/.fehbg",
+                dirs::home_dir().unwrap().to_str().unwrap()
+            )))
+            .unwrap();
+
+            // Extract the wallpaper path from the fehbg file
+            let re = Regex::new(r"'(.*?)'").unwrap();
+            let caps = re.captures(&fehbg).unwrap();
+            let path = caps.get(1).map_or("", |m| m.as_str());
+
+            // Extract the file name from the wallpaper path
+            let path = Path::new(path);
+            let file_name = path.file_name().unwrap().to_str().unwrap();
+
+            let wallpaper = db.get_wallpaper_details(file_name).unwrap();
+
+            println!("{}", file_name);
+
+            println!("{}", wallpaper.id);
+
+            let client = reqwest::Client::new();
+            let url = format!("https://wallhaven.cc/api/v1/w/{}", wallpaper.id);
+            let res = client.get(url).send().await?;
+            let body: Value = res.json().await?;
+            let tags = &body["data"]["tags"];
+            for tag in tags.as_array().unwrap() {
+                println!("{}", tag["name"].as_str().unwrap());
+            }
+        }
     }
 
     Ok(())
 }
 
-async fn download() -> Result<(), MyError> {
+async fn download(db: &Database) -> Result<(), MyError> {
     println!("Downloading wallpaper...");
 
     let config = Config::new("/home/sinh/.config/sinh-x/wallpaper/config.toml")
@@ -156,40 +214,53 @@ async fn download() -> Result<(), MyError> {
                 wallpaper.file_type.split('/').last().unwrap()
             );
 
-            let mut file_exists = false;
-
-            for folder_path in folder_paths {
-                let full_path = Path::new(&folder_path).join(&file_name);
-                if full_path.exists() {
-                    file_exists = true;
-                    break;
+            match db.get_wallpaper_details(&file_name) {
+                Ok(_) => {
+                    debug!("Wallpaper already exists in the database");
+                    continue;
                 }
-            }
+                Err(_) => {
+                    let _ = db.save_to_db(&file_name, &wallpaper);
 
-            if !file_exists {
-                let mut file_path = PathBuf::from(&config.general.wallpaper_dir);
-                if wallpaper.purity != "sfw" {
-                    file_path = file_path.join("nsfw");
-                }
+                    let mut file_exists = false;
 
-                file_path = file_path.join(&file_name);
+                    for folder_path in folder_paths {
+                        let full_path = Path::new(&folder_path).join(&file_name);
+                        if full_path.exists() {
+                            file_exists = true;
+                            break;
+                        }
+                    }
 
-                if !file_path.exists() {
-                    let image_bytes = reqwest::get(&wallpaper.path).await?.bytes().await?;
-                    fs::write(&file_path, image_bytes)?;
-                    count += 1;
+                    if !file_exists {
+                        let mut file_path = PathBuf::from(&config.general.wallpaper_dir);
+                        if wallpaper.purity != "sfw" {
+                            file_path = file_path.join("nsfw");
+                        }
 
-                    println!("Saved wallpaper to: {:?}", file_path);
-                    println!("Current count: {}", count);
+                        file_path = file_path.join(&file_name);
 
-                    if count >= 10 {
-                        break;
+                        if !file_path.exists() {
+                            let image_bytes = reqwest::get(&wallpaper.path).await?.bytes().await?;
+                            fs::write(&file_path, image_bytes)?;
+                            count += 1;
+
+                            debug!("Saved wallpaper to: {:?}", file_path);
+                            debug!("Current count: {}", count);
+
+                            if count >= 10 {
+                                break;
+                            }
+                        }
                     }
                 }
             }
         }
 
         page += 1;
+        if page > response.meta.last_page {
+            break;
+        }
     }
 
     Ok(())
@@ -211,7 +282,11 @@ fn refresh(path: Option<&Path>) -> Result<(), MyError> {
         Some(path) => path.to_path_buf(),
         None => {
             let entries = std::fs::read_dir(wallpaper_dir)?;
-            let wallpapers: Vec<_> = entries.map(|e| e.unwrap().path()).collect();
+            let wallpapers: Vec<_> = entries
+                .filter_map(Result::ok)
+                .filter(|e| e.path().is_file())
+                .map(|e| e.path())
+                .collect();
             let mut rng = rand::thread_rng();
             wallpapers[rng.gen_range(0..wallpapers.len())].clone()
         }

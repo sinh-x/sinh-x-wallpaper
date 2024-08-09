@@ -16,10 +16,17 @@
         pkgs = nixpkgs.legacyPackages.${system};
         sinh-x-wallpaper = pkgs.rustPlatform.buildRustPackage {
           pname = "sinh-x-wallpaper";
-          version = "0.1.0";
+          version = "0.2.0";
           src = ./.;
-          cargoHash = "sha256-P35+K7ipaPg7z1HXPjofEW4LM21VDsCyJP/SidMnrik=";
-          buildInputs = [pkgs.openssl];
+          cargoHash = "sha256-QJ5TBzAEah6xHNtzgvdMqEdlza7ENn80dNrhwR3c+UQ=";
+          buildInputs = with pkgs; [
+            cargo
+            rustc
+            pkg-config
+            openssl
+            rustfmt
+            clippy
+          ];
           nativeBuildInputs = [pkgs.cargo pkgs.rustc pkgs.pkg-config pkgs.openssl];
         };
       in {
@@ -34,6 +41,9 @@
             rustfmt
             clippy
           ];
+          shellHook = ''
+            exec fish
+          '';
         };
       }
     );
