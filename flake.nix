@@ -16,9 +16,9 @@
         pkgs = nixpkgs.legacyPackages.${system};
         sinh-x-wallpaper = pkgs.rustPlatform.buildRustPackage {
           pname = "sinh-x-wallpaper";
-          version = "0.2.0";
+          version = "0.3.0";
           src = ./.;
-          cargoHash = "sha256-QJ5TBzAEah6xHNtzgvdMqEdlza7ENn80dNrhwR3c+UQ=";
+          cargoHash = "sha256-3lG/J6iAlU/Xk/MG8HD9im7qalhO+jHxhlxJ8TTICL8=";
           buildInputs = with pkgs; [
             cargo
             rustc

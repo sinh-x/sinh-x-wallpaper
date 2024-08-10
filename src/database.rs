@@ -92,7 +92,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Response;
+    use crate::wallhaven::Response;
     use lazy_static::lazy_static;
     use std::fs;
     use std::sync::Once;

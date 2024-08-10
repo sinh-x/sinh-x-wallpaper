@@ -1,0 +1,3 @@
+- Current wallpaper handling
+  - Favorite mechanism
+  - Archives

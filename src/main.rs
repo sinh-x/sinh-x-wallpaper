@@ -2,8 +2,6 @@ use dirs;
 use log::debug;
 use rand::Rng;
 use regex::Regex;
-use serde_derive::{Deserialize, Serialize};
-use serde_json::from_str;
 use serde_json::Value;
 use std::fs;
 use std::fs::File;
@@ -18,54 +16,11 @@ use error::MyError;
 
 mod config;
 mod database;
+mod wallhaven;
 
 use config::Config;
 use database::Database;
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct Wallpaper {
-    id: String,
-    url: String,
-    short_url: String,
-    views: u32,
-    favorites: u32,
-    source: String,
-    purity: String,
-    category: String,
-    dimension_x: u32,
-    dimension_y: u32,
-    resolution: String,
-    ratio: String,
-    file_size: u32,
-    file_type: String,
-    created_at: String,
-    colors: Vec<String>,
-    path: String,
-    thumbs: Thumbs,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct Thumbs {
-    large: String,
-    original: String,
-    small: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct Meta {
-    current_page: u32,
-    last_page: u32,
-    per_page: String,
-    total: u32,
-    query: Option<String>,
-    seed: Option<String>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct Response {
-    data: Vec<Wallpaper>,
-    meta: Meta,
-}
+use wallhaven::Wallpaper;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "wallpaper")]
@@ -110,7 +65,17 @@ async fn main() -> Result<(), MyError> {
     match opt.cmd {
         Command::Refresh { path } => refresh(path.as_deref())?,
         Command::Download => {
-            match download(&db).await {
+            let wallhaven = wallhaven::WallHaven::new(
+                &config.download.api_key,
+                &config.download.purity,
+                &config.download.categories,
+                &"2880x1800",
+                &config.download.query,
+                &config.general.wallpaper_dir,
+                &db,
+            );
+
+            match wallhaven.download().await {
                 Ok(_) => println!("Downloaded wallpapers successfully"),
                 Err(e) => eprintln!("Failed to download wallpapers: {}", e),
             }
@@ -162,104 +127,6 @@ async fn main() -> Result<(), MyError> {
             for tag in tags.as_array().unwrap() {
                 println!("{}", tag["name"].as_str().unwrap());
             }
-        }
-    }
-
-    Ok(())
-}
-
-async fn download(db: &Database) -> Result<(), MyError> {
-    println!("Downloading wallpaper...");
-
-    let config = Config::new("/home/sinh/.config/sinh-x/wallpaper/config.toml")
-        .expect("Failed to load config");
-    config.validate().expect("Invalid config");
-
-    let api_key = config.download.api_key;
-    let purity = config.download.purity; // Replace with the actual purity value
-    let categories = config.download.categories; // Replace with the actual category value
-    let mut page = 1;
-    let mut count = 0;
-    let atleast = "2880x1800";
-    let query = config.download.query;
-    while count < 10 {
-        let url = format!(
-            "https://wallhaven.cc/api/v1/search?apikey={}&purity={}&categories={}&page={}&atleast={}&q={}",
-            api_key, purity, categories, page, atleast, query
-        );
-        println!("URL: {}", &url);
-        let response_text = reqwest::get(&url).await?.text().await?;
-
-        // Parse the JSON response into a Response instance
-        let response: Response = from_str(&response_text)?;
-
-        for wallpaper in response.data {
-            let wallpaper_dir = &config.general.wallpaper_dir;
-            let folder_paths: Vec<_> = fs::read_dir(wallpaper_dir)
-                .expect("Directory not found")
-                .filter_map(|entry| {
-                    let entry = entry.ok()?;
-                    if entry.file_type().ok()?.is_dir() {
-                        Some(entry.path())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            let file_name = format!(
-                "wallhaven-{}-{}.{}",
-                wallpaper.id,
-                wallpaper.resolution,
-                wallpaper.file_type.split('/').last().unwrap()
-            );
-
-            match db.get_wallpaper_details(&file_name) {
-                Ok(_) => {
-                    debug!("Wallpaper already exists in the database");
-                    continue;
-                }
-                Err(_) => {
-                    let _ = db.save_to_db(&file_name, &wallpaper);
-
-                    let mut file_exists = false;
-
-                    for folder_path in folder_paths {
-                        let full_path = Path::new(&folder_path).join(&file_name);
-                        if full_path.exists() {
-                            file_exists = true;
-                            break;
-                        }
-                    }
-
-                    if !file_exists {
-                        let mut file_path = PathBuf::from(&config.general.wallpaper_dir);
-                        if wallpaper.purity != "sfw" {
-                            file_path = file_path.join("nsfw");
-                        }
-
-                        file_path = file_path.join(&file_name);
-
-                        if !file_path.exists() {
-                            let image_bytes = reqwest::get(&wallpaper.path).await?.bytes().await?;
-                            fs::write(&file_path, image_bytes)?;
-                            count += 1;
-
-                            debug!("Saved wallpaper to: {:?}", file_path);
-                            debug!("Current count: {}", count);
-
-                            if count >= 10 {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        page += 1;
-        if page > response.meta.last_page {
-            break;
         }
     }
 
